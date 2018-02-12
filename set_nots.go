@@ -3,11 +3,13 @@ package set
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 )
 
 // Provides a common set baseline for both threadsafe and non-ts Sets.
 type set struct {
-	m map[interface{}]struct{} // struct{} doesn't take up space
+	m map[string]struct{} // struct{} doesn't take up space
+	size uint64
 }
 
 // SetNonTS defines a non-thread safe set data structure.
@@ -15,59 +17,85 @@ type SetNonTS struct {
 	set
 }
 
-// NewNonTS creates and initializes a new non-threadsafe Set.
-func newNonTS() *SetNonTS {
+// NewNonTS creates and initialize a new non-threadsafe Set.
+// It accepts a variable number of arguments to populate the initial set.
+// If nothing is passed a SetNonTS with zero size is created.
+func NewNonTS(items ...string) *SetNonTS {
 	s := &SetNonTS{}
-	s.m = make(map[interface{}]struct{})
+	s.m = make(map[string]struct{})
 
-	// Ensure interface compliance
-	var _ Interface = s
-
+	s.Add(items...)
 	return s
+}
+
+// New creates and initalizes a new Set interface. It accepts a variable
+// number of arguments to populate the initial set. If nothing is passed a
+// zero size Set based on the struct is created.
+func (s *set) New(items ...string) Interface {
+	return NewNonTS(items...)
 }
 
 // Add includes the specified items (one or more) to the set. The underlying
 // Set s is modified. If passed nothing it silently returns.
-func (s *set) Add(items ...interface{}) {
-	if len(items) == 0 {
+func (s *set) Add(items ...string) {
+	var count int
+	for _, item := range items {
+		if _, ok := s.m[item]; ok {
+			continue
+		}
+		s.m[item] = struct{}{}
+		count++
+	}
+	atomic.AddUint64(&s.size, uint64(count))
+}
+
+func (s *set) add(item string) {
+	if _, ok := s.m[item]; ok {
 		return
 	}
 
-	for _, item := range items {
-		s.m[item] = keyExists
-	}
+	s.m[item] = struct{}{}
+	atomic.AddUint64(&s.size, 1)
 }
 
 // Remove deletes the specified items from the set.  The underlying Set s is
 // modified. If passed nothing it silently returns.
-func (s *set) Remove(items ...interface{}) {
-	if len(items) == 0 {
+func (s *set) Remove(items ...string) {
+	var diff int
+
+	for _, item := range items {
+		if _, ok := s.m[item]; !ok {
+			diff++
+			continue
+		}
+
+		delete(s.m, item)
+	}
+	atomic.AddUint64(&s.size, ^uint64(len(items)-diff-1))
+}
+
+func (s *set) remove(item string) {
+	if _, ok := s.m[item]; !ok {
 		return
 	}
 
-	for _, item := range items {
-		delete(s.m, item)
-	}
+	delete(s.m, item)
+	atomic.AddUint64(&s.size, ^uint64(0))
 }
 
 // Pop  deletes and return an item from the set. The underlying Set s is
 // modified. If set is empty, nil is returned.
-func (s *set) Pop() interface{} {
+func (s *set) Pop() string {
 	for item := range s.m {
-		delete(s.m, item)
+		s.remove(item)
 		return item
 	}
-	return nil
+	return ""
 }
 
 // Has looks for the existence of items passed. It returns false if nothing is
 // passed. For multiple items it returns true only if all of  the items exist.
-func (s *set) Has(items ...interface{}) bool {
-	// assume checked for empty item, which not exist
-	if len(items) == 0 {
-		return false
-	}
-
+func (s *set) Has(items ...string) bool {
 	has := true
 	for _, item := range items {
 		if _, has = s.m[item]; !has {
@@ -79,12 +107,13 @@ func (s *set) Has(items ...interface{}) bool {
 
 // Size returns the number of items in a set.
 func (s *set) Size() int {
-	return len(s.m)
+	return int(atomic.LoadUint64(&s.size))
 }
 
 // Clear removes all items from the set.
 func (s *set) Clear() {
-	s.m = make(map[interface{}]struct{})
+	s.m = make(map[string]struct{})
+	atomic.StoreUint64(&s.size, 0)
 }
 
 // IsEmpty reports whether the Set is empty.
@@ -94,19 +123,12 @@ func (s *set) IsEmpty() bool {
 
 // IsEqual test whether s and t are the same in size and have the same items.
 func (s *set) IsEqual(t Interface) bool {
-	// Force locking only if given set is threadsafe.
-	if conv, ok := t.(*Set); ok {
-		conv.l.RLock()
-		defer conv.l.RUnlock()
-	}
-
-	// return false if they are no the same size
-	if sameSize := len(s.m) == t.Size(); !sameSize {
+	if s.Size() != t.Size() {
 		return false
 	}
 
 	equal := true
-	t.Each(func(item interface{}) bool {
+	t.Each(func(item string) bool {
 		_, equal = s.m[item]
 		return equal // if false, Each() will end
 	})
@@ -118,7 +140,7 @@ func (s *set) IsEqual(t Interface) bool {
 func (s *set) IsSubset(t Interface) (subset bool) {
 	subset = true
 
-	t.Each(func(item interface{}) bool {
+	t.Each(func(item string) bool {
 		_, subset = s.m[item]
 		return subset
 	})
@@ -134,7 +156,7 @@ func (s *set) IsSuperset(t Interface) bool {
 // Each traverses the items in the Set, calling the provided function for each
 // set member. Traversal will continue until all items in the Set have been
 // visited, or if the closure returns false.
-func (s *set) Each(f func(item interface{}) bool) {
+func (s *set) Each(f func(item string) bool) {
 	for item := range s.m {
 		if !f(item) {
 			break
@@ -142,29 +164,15 @@ func (s *set) Each(f func(item interface{}) bool) {
 	}
 }
 
-// Copy returns a new Set with a copy of s.
-func (s *set) Copy() Interface {
-	u := newNonTS()
-	for item := range s.m {
-		u.Add(item)
-	}
-	return u
-}
-
 // String returns a string representation of s
 func (s *set) String() string {
-	t := make([]string, 0, len(s.List()))
-	for _, item := range s.List() {
-		t = append(t, fmt.Sprintf("%v", item))
-	}
-
-	return fmt.Sprintf("[%s]", strings.Join(t, ", "))
+	return fmt.Sprintf("[%s]", strings.Join(s.List(), ", "))
 }
 
 // List returns a slice of all items. There is also StringSlice() and
 // IntSlice() methods for returning slices of type string or int.
-func (s *set) List() []interface{} {
-	list := make([]interface{}, 0, len(s.m))
+func (s *set) List() []string {
+	list := make([]string, 0, len(s.m))
 
 	for item := range s.m {
 		list = append(list, item)
@@ -173,11 +181,16 @@ func (s *set) List() []interface{} {
 	return list
 }
 
+// Copy returns a new Set with a copy of s.
+func (s *set) Copy() Interface {
+	return NewNonTS(s.List()...)
+}
+
 // Merge is like Union, however it modifies the current set it's applied on
 // with the given t set.
 func (s *set) Merge(t Interface) {
-	t.Each(func(item interface{}) bool {
-		s.m[item] = keyExists
+	t.Each(func(item string) bool {
+		s.add(item)
 		return true
 	})
 }

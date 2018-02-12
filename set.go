@@ -5,55 +5,25 @@
 // between the start and the end of the operation.
 package set
 
-// SetType denotes which type of set is created. ThreadSafe or NonThreadSafe
-type SetType int
-
-const (
-	ThreadSafe = iota
-	NonThreadSafe
-)
-
-func (s SetType) String() string {
-	switch s {
-	case ThreadSafe:
-		return "ThreadSafe"
-	case NonThreadSafe:
-		return "NonThreadSafe"
-	}
-	return ""
-}
-
 // Interface is describing a Set. Sets are an unordered, unique list of values.
 type Interface interface {
-	Add(items ...interface{})
-	Remove(items ...interface{})
-	Pop() interface{}
-	Has(items ...interface{}) bool
+	New(items ...string) Interface
+	Add(items ...string)
+	Remove(items ...string)
+	Pop() string
+	Has(items ...string) bool
 	Size() int
 	Clear()
 	IsEmpty() bool
 	IsEqual(s Interface) bool
 	IsSubset(s Interface) bool
 	IsSuperset(s Interface) bool
-	Each(func(interface{}) bool)
+	Each(func(string) bool)
 	String() string
-	List() []interface{}
+	List() []string
 	Copy() Interface
 	Merge(s Interface)
 	Separate(s Interface)
-}
-
-// helpful to not write everywhere struct{}{}
-var keyExists = struct{}{}
-
-// New creates and initalizes a new Set interface. Its single parameter
-// denotes the type of set to create. Either ThreadSafe or
-// NonThreadSafe. The default is ThreadSafe.
-func New(settype SetType) Interface {
-	if settype == NonThreadSafe {
-		return newNonTS()
-	}
-	return newTS()
 }
 
 // Union is the merger of multiple sets. It returns a new set with all the
@@ -61,52 +31,86 @@ func New(settype SetType) Interface {
 //
 // The dynamic type of the returned set is determined by the first passed set's
 // implementation of the New() method.
-func Union(set1, set2 Interface, sets ...Interface) Interface {
-	u := set1.Copy()
-	set2.Each(func(item interface{}) bool {
-		u.Add(item)
-		return true
-	})
+func Union(sets ...Interface) Interface {
+	result := sets[0].New()
+
 	for _, set := range sets {
-		set.Each(func(item interface{}) bool {
-			u.Add(item)
+		set.Each(func(item string) bool {
+			if !result.Has(item) {
+				result.Add(item)
+			}
+
 			return true
 		})
 	}
 
-	return u
+	return result
 }
 
 // Difference returns a new set which contains items which are in in the first
 // set but not in the others. Unlike the Difference() method you can use this
 // function separately with multiple sets.
-func Difference(set1, set2 Interface, sets ...Interface) Interface {
-	s := set1.Copy()
-	s.Separate(set2)
-	for _, set := range sets {
-		s.Separate(set) // seperate is thread safe
-	}
-	return s
-}
+func Difference(sets ...Interface) Interface {
+	result := sets[0].New()
 
-// Intersection returns a new set which contains items that only exist in all given sets.
-func Intersection(set1, set2 Interface, sets ...Interface) Interface {
-	all := Union(set1, set2, sets...)
-	result := Union(set1, set2, sets...)
-
-	all.Each(func(item interface{}) bool {
-		if !set1.Has(item) || !set2.Has(item) {
-			result.Remove(item)
-		}
-
-		for _, set := range sets {
-			if !set.Has(item) {
-				result.Remove(item)
+	sets[0].Each(func(item string) bool {
+		inDifference := true
+		for i, set := range sets {
+			if i == 0 {
+				continue
 			}
+
+			if set.Has(item) {
+				inDifference = false
+				break
+			}
+		}
+		if inDifference {
+			result.Add(item)
 		}
 		return true
 	})
 	return result
+}
+
+// Intersection returns a new set which contains items that only exist in all given sets.
+func Intersection(sets ...Interface) Interface {
+	result := sets[0].New()
+	smallestIndex := getSmallestSet(sets...)
+
+	sets[smallestIndex].Each(func(item string) bool {
+		inIntersection := true
+		for i, set := range sets {
+			if i == smallestIndex {
+				continue
+			}
+
+			if !set.Has(item) {
+				inIntersection = false
+				break
+			}
+		}
+		if inIntersection {
+			result.Add(item)
+		}
+		return true
+	})
+	return result
+}
+
+func getSmallestSet(sets ...Interface) int {
+	var smallestLen int
+	var smallestIndex int
+	var setSize int
+	for i, set := range sets {
+		setSize = set.Size()
+		if set.Size() < smallestLen || smallestLen == 0 {
+			smallestLen = setSize
+			smallestIndex = i
+		}
+	}
+
+	return smallestIndex
 }
 
 // SymmetricDifference returns a new set which s is the difference of items which are in
@@ -120,29 +124,9 @@ func SymmetricDifference(s Interface, t Interface) Interface {
 // StringSlice is a helper function that returns a slice of strings of s. If
 // the set contains mixed types of items only items of type string are returned.
 func StringSlice(s Interface) []string {
-	slice := make([]string, 0)
+	var slice []string
 	for _, item := range s.List() {
-		v, ok := item.(string)
-		if !ok {
-			continue
-		}
-
-		slice = append(slice, v)
-	}
-	return slice
-}
-
-// IntSlice is a helper function that returns a slice of ints of s. If
-// the set contains mixed types of items only items of type int are returned.
-func IntSlice(s Interface) []int {
-	slice := make([]int, 0)
-	for _, item := range s.List() {
-		v, ok := item.(int)
-		if !ok {
-			continue
-		}
-
-		slice = append(slice, v)
+		slice = append(slice, item)
 	}
 	return slice
 }

@@ -170,7 +170,7 @@ func TestSetNonTS_IsEqual(t *testing.T) {
 
 	ok = a.IsEqual(b)
 	if ok {
-		t.Error("IsEqual: set a and b are now equal (1). However it returns true")
+		t.Error("IsEqual: set a and b are now not equal (1). However it returns true", a, b)
 	}
 
 	// different size, similar content
@@ -181,7 +181,7 @@ func TestSetNonTS_IsEqual(t *testing.T) {
 
 	ok = a.IsEqual(b)
 	if ok {
-		t.Error("IsEqual: set s and t are now equal (2). However it returns true")
+		t.Error("IsEqual: set s and t are now not equal (2). However it returns true")
 	}
 }
 
@@ -275,7 +275,7 @@ func TestSetNonTS_Merge(t *testing.T) {
 	s.Merge(r)
 
 	if s.Size() != 5 {
-		t.Error("Merge: the set doesn't have all items in it.")
+		t.Error("Merge: the set doesn't have all items in it.", s, s.Size())
 	}
 
 	if !s.Has("1", "2", "3", "4", "5") {

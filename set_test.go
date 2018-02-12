@@ -70,7 +70,7 @@ func Test_Intersection(t *testing.T) {
 	u := Intersection(s1, s2, s3)
 
 	if u.Size() != 1 {
-		t.Error("Intersection: the set doesn't have all items in it.")
+		t.Error("Intersection: the set doesn't have all items in it.", u.List())
 	}
 
 	if !u.Has("5") {
