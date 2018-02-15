@@ -1,22 +1,18 @@
 package set
 
+/*
 import (
 	"reflect"
 	"testing"
+	"strconv"
 )
 
 func Test_Union(t *testing.T) {
-	s := newTS()
-	s.Add("1", "2", "3")
-	r := newTS()
-	r.Add("3", "4", "5")
-	x := newNonTS()
-	x.Add("5", "6", "7")
+	s := New("1", "2", "3")
+	r := New("3", "4", "5")
+	x := New("5", "6", "7")
 
 	u := Union(s, r, x)
-	if settype := reflect.TypeOf(u).String(); settype != "*set.Set" {
-		t.Error("Union should derive its set type from the first passed set, got", settype)
-	}
 	if u.Size() != 7 {
 		t.Error("Union: the merged set doesn't have all items in it.")
 	}
@@ -29,20 +25,12 @@ func Test_Union(t *testing.T) {
 	if z.Size() != 5 {
 		t.Error("Union: Union of 2 sets doesn't have the proper number of items.")
 	}
-	if settype := reflect.TypeOf(z).String(); settype != "*set.SetNonTS" {
-		t.Error("Union should derive its set type from the first passed set, got", settype)
-	}
-
 }
 
 func Test_Difference(t *testing.T) {
-	s := newTS()
-	s.Add("1", "2", "3")
-	r := newTS()
-	r.Add("3", "4", "5")
-	x := newNonTS()
-	x.Add("5", "6", "7")
-
+	s := New("1", "2", "3")
+	r := New("3", "4", "5")
+	x := New("5", "6", "7")
 	u := Difference(s, r, x)
 
 	if u.Size() != 2 {
@@ -55,18 +43,15 @@ func Test_Difference(t *testing.T) {
 
 	y := Difference(r, r)
 	if y.Size() != 0 {
-		t.Error("Difference: size should be zero")
+		t.Error("Difference: Length should be zero")
 	}
 
 }
 
 func Test_Intersection(t *testing.T) {
-	s1 := newTS()
-	s1.Add("1", "3", "4", "5")
-	s2 := newTS()
-	s2.Add("3", "5", "6")
-	s3 := newTS()
-	s3.Add("4", "5", "6", "7")
+	s1 := New("1", "3", "4", "5")
+	s2 := New("2", "3", "5", "6")
+	s3 := New("4", "5", "6", "7")
 	u := Intersection(s1, s2, s3)
 
 	if u.Size() != 1 {
@@ -78,27 +63,9 @@ func Test_Intersection(t *testing.T) {
 	}
 }
 
-func Test_Intersection2(t *testing.T) {
-	s1 := newTS()
-	s1.Add("1", "3", "4", "5")
-	s2 := newTS()
-	s2.Add("5", "6")
-	i := Intersection(s1, s2)
-
-	if i.Size() != 1 {
-		t.Error("Intersection: size should be 1, it was", i.Size())
-	}
-
-	if !i.Has("5") {
-		t.Error("Intersection: items after intersection are not availabile in the set.")
-	}
-}
-
 func Test_SymmetricDifference(t *testing.T) {
-	s := newTS()
-	s.Add("1", "2", "3")
-	r := newTS()
-	r.Add("3", "4", "5")
+	s := New("1", "2", "3")
+	r := New("3", "4", "5")
 	u := SymmetricDifference(s, r)
 
 	if u.Size() != 4 {
@@ -111,11 +78,10 @@ func Test_SymmetricDifference(t *testing.T) {
 }
 
 func Test_StringSlice(t *testing.T) {
-	s := newTS()
-	s.Add("san francisco", "istanbul", 3.14, 1321, "ankara")
+	s := New("san francisco", "istanbul", "3.14", "1321", "ankara")
 	u := StringSlice(s)
 
-	if len(u) != 3 {
+	if len(u) != 5 {
 		t.Error("StringSlice: slice should only have three items")
 	}
 
@@ -127,30 +93,14 @@ func Test_StringSlice(t *testing.T) {
 	}
 }
 
-func Test_IntSlice(t *testing.T) {
-	s := newTS()
-	s.Add("san francisco", "istanbul", 3.14, 1321, "ankara", 8876)
-	u := IntSlice(s)
-
-	if len(u) != 2 {
-		t.Error("IntSlice: slice should only have two items")
-	}
-
-	for _, item := range u {
-		r := reflect.TypeOf(item)
-		if r.Kind().String() != "int" {
-			t.Error("Intslice: slice item should be a int")
-		}
-	}
-}
-
-func BenchmarkSetEquality(b *testing.B) {
-	s := newTS()
-	u := newTS()
+func BenchmarkSetEqualityWorthCase(b *testing.B) {
+	s := New()
+	u := New()
 
 	for i := 0; i < b.N; i++ {
-		s.Add(i)
-		u.Add(i)
+		v := strconv.Itoa(i)
+		s.Add(v)
+		u.Add(v)
 	}
 
 	b.ResetTimer()
@@ -161,12 +111,13 @@ func BenchmarkSetEquality(b *testing.B) {
 }
 
 func BenchmarkSubset(b *testing.B) {
-	s := newTS()
-	u := newTS()
+	s := New()
+	u := New()
 
 	for i := 0; i < b.N; i++ {
-		s.Add(i)
-		u.Add(i)
+		v := strconv.Itoa(i)
+		s.Add(v)
+		u.Add(v)
 	}
 
 	b.ResetTimer()
@@ -177,14 +128,16 @@ func BenchmarkSubset(b *testing.B) {
 }
 
 func benchmarkIntersection(b *testing.B, numberOfItems int) {
-	s1 := newTS()
-	s2 := newTS()
+	s1 := New()
+	s2 := New()
 
 	for i := 0; i < numberOfItems/2; i++ {
-		s1.Add(i)
+		v := strconv.Itoa(i)
+		s1.Add(v)
 	}
 	for i := 0; i < numberOfItems; i++ {
-		s2.Add(i)
+		v := strconv.Itoa(i)
+		s2.Add(v)
 	}
 
 	b.ResetTimer()
@@ -216,3 +169,5 @@ func BenchmarkIntersection100000(b *testing.B) {
 func BenchmarkIntersection1000000(b *testing.B) {
 	benchmarkIntersection(b, 1000000)
 }
+
+*/

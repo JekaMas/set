@@ -1,132 +1,194 @@
-// Package set provides both threadsafe and non-threadsafe implementations of
-// a generic set data structure. In the threadsafe set, safety encompasses all
-// operations on one set. Operations on multiple sets are consistent in that
-// the elements of each set used was valid at exactly one point in time
-// between the start and the end of the operation.
 package set
 
-// Interface is describing a Set. Sets are an unordered, unique list of values.
-type Interface interface {
-	New(items ...string) Interface
-	Add(items ...string)
-	Remove(items ...string)
-	Pop() string
-	Has(items ...string) bool
-	Size() int
-	Clear()
-	IsEmpty() bool
-	IsEqual(s Interface) bool
-	IsSubset(s Interface) bool
-	IsSuperset(s Interface) bool
-	Each(func(string) bool)
-	String() string
-	List() []string
-	Copy() Interface
-	Merge(s Interface)
-	Separate(s Interface)
+import (
+	"sync"
+	"fmt"
+	"sync/atomic"
+	"strings"
+)
+
+// Provides a common set baseline for both threadsafe and non-ts Sets.
+type set struct {
+	Storage map[string]struct{}
+	size    uint64
+	sync.RWMutex
 }
 
-// Union is the merger of multiple sets. It returns a new set with all the
-// elements present in all the sets that are passed.
-//
-// The dynamic type of the returned set is determined by the first passed set's
-// implementation of the New() method.
-func Union(sets ...Interface) Interface {
-	result := sets[0].New()
+func newSet() *set {
+	s := &set{}
+	s.Storage = make(map[string]struct{})
 
-	for _, set := range sets {
-		set.Each(func(item string) bool {
-			if !result.Has(item) {
-				result.Add(item)
-			}
+	return s
+}
 
-			return true
-		})
+// Add includes the specified items (one or more) to the set. The underlying
+// set s is modified. If passed nothing it silently returns.
+func (s *set) Add(items ...string) int {
+	var count int
+	for _, item := range items {
+		if _, ok := s.Storage[item]; ok {
+			continue
+		}
+		s.Storage[item] = struct{}{}
+		count++
+	}
+	atomic.AddUint64(&s.size, uint64(count))
+
+	return count
+}
+
+func (s *set) add(item string) {
+	if _, ok := s.Storage[item]; ok {
+		return
 	}
 
-	return result
+	s.Storage[item] = struct{}{}
+	atomic.AddUint64(&s.size, 1)
 }
 
-// Difference returns a new set which contains items which are in in the first
-// set but not in the others. Unlike the Difference() method you can use this
-// function separately with multiple sets.
-func Difference(sets ...Interface) Interface {
-	result := sets[0].New()
+// Remove deletes the specified items from the set.  The underlying set s is
+// modified. If passed nothing it silently returns.
+func (s *set) Remove(items ...string) int {
+	var diff int
 
-	sets[0].Each(func(item string) bool {
-		inDifference := true
-		for i, set := range sets {
-			if i == 0 {
-				continue
-			}
+	for _, item := range items {
+		if _, ok := s.Storage[item]; !ok {
+			diff++
+			continue
+		}
 
-			if set.Has(item) {
-				inDifference = false
-				break
-			}
+		delete(s.Storage, item)
+	}
+	atomic.AddUint64(&s.size, ^uint64(len(items)-diff-1))
+
+	return len(items)-diff
+}
+
+func (s *set) remove(item string) {
+	if _, ok := s.Storage[item]; !ok {
+		return
+	}
+
+	delete(s.Storage, item)
+	atomic.AddUint64(&s.size, ^uint64(0))
+}
+
+// Pop  deletes and return an item from the set. The underlying set s is
+// modified. If set is empty, nil is returned.
+func (s *set) Pop() string {
+	for item := range s.Storage {
+		s.remove(item)
+		return item
+	}
+	return ""
+}
+
+// Has looks for the existence of items passed. It returns false if nothing is
+// passed. For multiple items it returns true only if all of  the items exist.
+func (s *set) Has(items ...string) bool {
+	has := true
+	for _, item := range items {
+		if _, has = s.Storage[item]; !has {
+			break
 		}
-		if inDifference {
-			result.Add(item)
+	}
+	return has
+}
+
+// Size returns the number of items in a set.
+func (s *set) Size() int {
+	return int(atomic.LoadUint64(&s.size))
+}
+
+// Clear removes all items from the set.
+func (s *set) Clear() {
+	s.Storage = make(map[string]struct{})
+	atomic.StoreUint64(&s.size, 0)
+}
+
+// IsEmpty reports whether the set is empty.
+func (s *set) IsEmpty() bool {
+	return s.Size() == 0
+}
+
+// IsEqual test whether s and t are the same in Length and have the same items.
+func (s *set) IsEqual(t *set) bool {
+	if s.Size() != t.Size() {
+		return false
+	}
+
+	equal := true
+	t.Each(func(item string) bool {
+		_, equal = s.Storage[item]
+		return equal // if false, Each() will end
+	})
+
+	return equal
+}
+
+// IsSubset tests whether t is a subset of s.
+func (s *set) IsSubset(t *set) (subset bool) {
+	subset = true
+
+	t.Each(func(item string) bool {
+		_, subset = s.Storage[item]
+		return subset
+	})
+
+	return
+}
+
+// IsSuperset tests whether t is a superset of s.
+func (s *set) IsSuperset(t *set) bool {
+	return t.IsSubset(s)
+}
+
+// Each traverses the items in the set, calling the provided function for each
+// set member. Traversal will continue until all items in the set have been
+// visited, or if the closure returns false.
+func (s *set) Each(f func(item string) bool) {
+	for item := range s.Storage {
+		if !f(item) {
+			break
 		}
+	}
+}
+
+// String returns a string representation of s
+func (s *set) String() string {
+	return fmt.Sprintf("[%s]", strings.Join(s.List(), ", "))
+}
+
+// List returns a slice of all items. There is also StringSlice() and
+// IntSlice() methods for returning slices of type string or int.
+func (s *set) List() []string {
+	list := make([]string, 0, len(s.Storage))
+
+	for item := range s.Storage {
+		list = append(list, item)
+	}
+
+	return list
+}
+
+// Copy returns a new set with a copy of s.
+func (s *set) Copy() *set {
+	clone := newSet()
+	clone.Add(s.List()...)
+	return clone
+}
+
+// Merge is like Union, however it modifies the current set it's applied on
+// with the given t set.
+func (s *set) Merge(t *set) {
+	t.Each(func(item string) bool {
+		s.add(item)
 		return true
 	})
-	return result
 }
 
-// Intersection returns a new set which contains items that only exist in all given sets.
-func Intersection(sets ...Interface) Interface {
-	result := sets[0].New()
-	smallestIndex := getSmallestSet(sets...)
-
-	sets[smallestIndex].Each(func(item string) bool {
-		inIntersection := true
-		for i, set := range sets {
-			if i == smallestIndex {
-				continue
-			}
-
-			if !set.Has(item) {
-				inIntersection = false
-				break
-			}
-		}
-		if inIntersection {
-			result.Add(item)
-		}
-		return true
-	})
-	return result
-}
-
-func getSmallestSet(sets ...Interface) int {
-	var smallestLen int
-	var smallestIndex int
-	var setSize int
-	for i, set := range sets {
-		setSize = set.Size()
-		if set.Size() < smallestLen || smallestLen == 0 {
-			smallestLen = setSize
-			smallestIndex = i
-		}
-	}
-
-	return smallestIndex
-}
-
-// SymmetricDifference returns a new set which s is the difference of items which are in
-// one of either, but not in both.
-func SymmetricDifference(s Interface, t Interface) Interface {
-	u := Difference(s, t)
-	v := Difference(t, s)
-	return Union(u, v)
-}
-
-// StringSlice is a helper function that returns a slice of strings of s. If
-// the set contains mixed types of items only items of type string are returned.
-func StringSlice(s Interface) []string {
-	var slice []string
-	for _, item := range s.List() {
-		slice = append(slice, item)
-	}
-	return slice
+// it's not the opposite of Merge.
+// Separate removes the set items containing in t from set s. Please aware that
+func (s *set) Separate(t *set) {
+	s.Remove(t.List()...)
 }

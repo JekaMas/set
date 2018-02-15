@@ -2,103 +2,100 @@ package set
 
 import (
 	"fmt"
-	"strings"
 	"sync/atomic"
+	"strings"
+	"math/rand"
 )
-
-// Provides a common set baseline for both threadsafe and non-ts Sets.
-type set struct {
-	m map[string]struct{} // struct{} doesn't take up space
-	size uint64
-}
 
 // SetNonTS defines a non-thread safe set data structure.
 type SetNonTS struct {
-	set
+	Sets    []*set
+	Buckets int
+	Length  uint64
 }
 
 // NewNonTS creates and initialize a new non-threadsafe Set.
 // It accepts a variable number of arguments to populate the initial set.
-// If nothing is passed a SetNonTS with zero size is created.
+// If nothing is passed a SetNonTS with zero Length is created.
 func NewNonTS(items ...string) *SetNonTS {
+	buckets := 64
 	s := &SetNonTS{}
-	s.m = make(map[string]struct{})
+	s.Buckets = buckets
+	s.Sets = make([]*set, buckets)
+
+	for i := range s.Sets {
+		s.Sets[i] = newSet()
+	}
 
 	s.Add(items...)
+
 	return s
 }
 
-// New creates and initalizes a new Set interface. It accepts a variable
-// number of arguments to populate the initial set. If nothing is passed a
-// zero size Set based on the struct is created.
-func (s *set) New(items ...string) Interface {
-	return NewNonTS(items...)
+func (s SetNonTS) GetBucketID(item string) int {
+	return hash(item, s.Buckets)
+}
+
+func (s *SetNonTS) GetSet(item string) *set {
+	return s.Sets[s.GetBucketID(item)]
 }
 
 // Add includes the specified items (one or more) to the set. The underlying
 // Set s is modified. If passed nothing it silently returns.
-func (s *set) Add(items ...string) {
+func (s *SetNonTS) Add(items ...string) {
 	var count int
+
 	for _, item := range items {
-		if _, ok := s.m[item]; ok {
-			continue
-		}
-		s.m[item] = struct{}{}
-		count++
+		set := s.GetSet(item)
+		count += set.Add(item)
 	}
-	atomic.AddUint64(&s.size, uint64(count))
-}
-
-func (s *set) add(item string) {
-	if _, ok := s.m[item]; ok {
-		return
-	}
-
-	s.m[item] = struct{}{}
-	atomic.AddUint64(&s.size, 1)
+	atomic.AddUint64(&s.Length, uint64(count))
 }
 
 // Remove deletes the specified items from the set.  The underlying Set s is
 // modified. If passed nothing it silently returns.
-func (s *set) Remove(items ...string) {
-	var diff int
+func (s *SetNonTS) Remove(items ...string) {
+	var count int
 
 	for _, item := range items {
-		if _, ok := s.m[item]; !ok {
-			diff++
-			continue
-		}
-
-		delete(s.m, item)
+		set := s.GetSet(item)
+		count += set.Remove(item)
 	}
-	atomic.AddUint64(&s.size, ^uint64(len(items)-diff-1))
-}
-
-func (s *set) remove(item string) {
-	if _, ok := s.m[item]; !ok {
-		return
-	}
-
-	delete(s.m, item)
-	atomic.AddUint64(&s.size, ^uint64(0))
+	atomic.AddUint64(&s.Length, ^uint64(count - 1))
 }
 
 // Pop  deletes and return an item from the set. The underlying Set s is
 // modified. If set is empty, nil is returned.
-func (s *set) Pop() string {
-	for item := range s.m {
-		s.remove(item)
-		return item
+func (s *SetNonTS) Pop() string {
+	i := rand.Intn(s.Buckets)
+
+	for true {
+		if i >= s.Buckets {
+			return ""
+		}
+		set := s.Sets[i]
+		if res := set.Pop(); res != "" {
+			atomic.AddUint64(&s.Length, ^uint64(0))
+			return res
+		}
+		i++
 	}
+
 	return ""
 }
 
 // Has looks for the existence of items passed. It returns false if nothing is
 // passed. For multiple items it returns true only if all of  the items exist.
-func (s *set) Has(items ...string) bool {
+func (s *SetNonTS) Has(items ...string) bool {
+	if s.Size() == 0 {
+		return false
+	}
+
 	has := true
 	for _, item := range items {
-		if _, has = s.m[item]; !has {
+		set := s.GetSet(item)
+		if !set.Has(item) {
+			has = false
 			break
 		}
 	}
@@ -106,97 +103,117 @@ func (s *set) Has(items ...string) bool {
 }
 
 // Size returns the number of items in a set.
-func (s *set) Size() int {
-	return int(atomic.LoadUint64(&s.size))
+func (s *SetNonTS) Size() int {
+	return int(atomic.LoadUint64(&s.Length))
 }
 
 // Clear removes all items from the set.
-func (s *set) Clear() {
-	s.m = make(map[string]struct{})
-	atomic.StoreUint64(&s.size, 0)
+func (s *SetNonTS) Clear() {
+	s.Sets = make([]*set, s.Buckets)
+
+	for i := range s.Sets {
+		s.Sets[i] = newSet()
+	}
+	atomic.StoreUint64(&s.Length, 0)
 }
 
 // IsEmpty reports whether the Set is empty.
-func (s *set) IsEmpty() bool {
+func (s *SetNonTS) IsEmpty() bool {
 	return s.Size() == 0
 }
 
-// IsEqual test whether s and t are the same in size and have the same items.
-func (s *set) IsEqual(t Interface) bool {
+// IsEqual test whether s and t are the same in Length and have the same items.
+func (s *SetNonTS) IsEqual(t *SetNonTS) bool {
 	if s.Size() != t.Size() {
 		return false
 	}
 
 	equal := true
-	t.Each(func(item string) bool {
-		_, equal = s.m[item]
-		return equal // if false, Each() will end
-	})
+	for i := 0; i < s.Buckets; i++ {
+		for item := range s.Sets[i].Storage {
+			if !t.Has(item) {
+				equal = false
+				break
+			}
+		}
+	}
 
 	return equal
 }
 
 // IsSubset tests whether t is a subset of s.
-func (s *set) IsSubset(t Interface) (subset bool) {
-	subset = true
+func (s *SetNonTS) IsSubset(t *SetNonTS) (subset bool) {
+	if t.Size() > s.Size() {
+		return false
+	}
 
-	t.Each(func(item string) bool {
-		_, subset = s.m[item]
-		return subset
-	})
+	subset = true
+	for i:=0; i < t.Buckets; i++ {
+		for item := range t.Sets[i].Storage {
+			if !s.Has(item) {
+				subset = false
+				break
+			}
+		}
+	}
 
 	return
 }
 
 // IsSuperset tests whether t is a superset of s.
-func (s *set) IsSuperset(t Interface) bool {
+func (s *SetNonTS) IsSuperset(t *SetNonTS) bool {
 	return t.IsSubset(s)
 }
 
 // Each traverses the items in the Set, calling the provided function for each
 // set member. Traversal will continue until all items in the Set have been
 // visited, or if the closure returns false.
-func (s *set) Each(f func(item string) bool) {
-	for item := range s.m {
-		if !f(item) {
-			break
+func (s *SetNonTS) Each(f func(item string) bool) {
+	for i:=0; i < s.Buckets; i++ {
+		for item := range s.Sets[i].Storage {
+			if !f(item) {
+				break
+			}
 		}
 	}
 }
 
 // String returns a string representation of s
-func (s *set) String() string {
+func (s *SetNonTS) String() string {
 	return fmt.Sprintf("[%s]", strings.Join(s.List(), ", "))
 }
 
 // List returns a slice of all items. There is also StringSlice() and
 // IntSlice() methods for returning slices of type string or int.
-func (s *set) List() []string {
-	list := make([]string, 0, len(s.m))
+func (s *SetNonTS) List() []string {
+	list := make([]string, 0, s.Size())
 
-	for item := range s.m {
-		list = append(list, item)
+	for i:=0; i < s.Buckets; i++ {
+		for item := range s.Sets[i].Storage {
+			list = append(list, item)
+		}
 	}
 
 	return list
 }
 
 // Copy returns a new Set with a copy of s.
-func (s *set) Copy() Interface {
+func (s *SetNonTS) Copy() *SetNonTS {
 	return NewNonTS(s.List()...)
 }
 
 // Merge is like Union, however it modifies the current set it's applied on
 // with the given t set.
-func (s *set) Merge(t Interface) {
-	t.Each(func(item string) bool {
-		s.add(item)
-		return true
-	})
+func (s *SetNonTS) Merge(t *SetNonTS) {
+	for i:=0; i < s.Buckets; i++ {
+		s.Add(t.Sets[i].List()...)
+	}
 }
 
 // it's not the opposite of Merge.
 // Separate removes the set items containing in t from set s. Please aware that
-func (s *set) Separate(t Interface) {
-	s.Remove(t.List()...)
+func (s *SetNonTS) Separate(t *SetNonTS) {
+	for i:=0; i < s.Buckets; i++ {
+		s.Remove(t.Sets[i].List()...)
+	}
 }
